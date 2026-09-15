@@ -1,0 +1,2 @@
+import test from 'node:test'; import assert from 'node:assert/strict'; import { Vault } from '../src/security.js';
+test('AES-256-GCM round trip and AAD binding',()=>{const v=new Vault({v1:Buffer.alloc(32,7).toString('base64')},'v1');const e=v.encrypt('secret','user:broker:access_token');assert.equal(v.decrypt(e.ciphertext,e.keyVersion,'user:broker:access_token'),'secret');assert.throws(()=>v.decrypt(e.ciphertext,e.keyVersion,'other'));});
