@@ -1,0 +1,37 @@
+name: Container CI
+on:
+  push:
+    branches: ["main", "master"]
+  pull_request:
+permissions:
+  contents: read
+  security-events: write
+jobs:
+  test-build-scan:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build and run repository tests
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: production
+          load: true
+          tags: gnkalgo:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Scan image for vulnerabilities
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: gnkalgo:${{ github.sha }}
+          format: sarif
+          output: trivy-results.sarif
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+      - name: Upload scan results
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif

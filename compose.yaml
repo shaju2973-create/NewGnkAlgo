@@ -1,0 +1,160 @@
+name: gnkalgo
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-gnkalgo}
+      POSTGRES_USER: ${POSTGRES_USER:-gnkalgo}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      TZ: Asia/Kolkata
+    secrets:
+      - postgres_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
+
+  migrate:
+    image: postgres:16-alpine
+    profiles: ["tools"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGDATABASE: ${POSTGRES_DB:-gnkalgo}
+      PGUSER: ${POSTGRES_USER:-gnkalgo}
+      PGPASSFILE: /run/secrets/postgres_pgpass
+    secrets:
+      - postgres_pgpass
+    volumes:
+      - ./migrations:/migrations:ro
+      - ./deploy/scripts/migrate.sh:/usr/local/bin/migrate:ro
+    networks:
+      - backend
+    entrypoint: ["/bin/sh", "/usr/local/bin/migrate"]
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: ["ALL"]
+
+  app:
+    build:
+      context: .
+      target: production
+    image: gnkalgo:${GNKALGO_IMAGE_TAG:-local}
+    restart: unless-stopped
+    env_file:
+      - path: .env.production
+        required: true
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 3000
+    depends_on:
+      postgres:
+        condition: service_healthy
+    expose:
+      - "3000"
+    networks:
+      - backend
+      - frontend
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: ["ALL"]
+    init: true
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/nginx/gnkalgo.conf:/etc/nginx/conf.d/default.conf:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+      - certbot_webroot:/var/www/certbot:ro
+    networks:
+      - frontend
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx:rw,noexec,nosuid,size=32m
+      - /var/run:rw,noexec,nosuid,size=1m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: ["ALL"]
+    cap_add:
+      - CHOWN
+      - NET_BIND_SERVICE
+      - SETGID
+      - SETUID
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1/health/live || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
+
+  certbot:
+    image: certbot/certbot:latest
+    profiles: ["tools"]
+    volumes:
+      - /etc/letsencrypt:/etc/letsencrypt
+      - certbot_webroot:/var/www/certbot
+    networks:
+      - frontend
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  postgres_data:
+  certbot_webroot:
+
+networks:
+  frontend:
+    internal: false
+  backend:
+    internal: true
+
+secrets:
+  postgres_password:
+    file: ./secrets/postgres_password
+  postgres_pgpass:
+    file: ./secrets/postgres_pgpass
