@@ -40,3 +40,9 @@ The first registration using `ADMIN_EMAIL` must also supply the one-time `ADMIN_
 - `GET /api/v1/auth/me`
 
 Broker routes accept either the HttpOnly access JWT cookie or `Authorization: Bearer <access-token>`. See [docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md) for security and migration details.
+
+## Quant platform MVP
+
+Open `/dashboard` for the simulation desk. The reference pipeline includes deterministic OHLCV data, EMA/RSI/ATR/VWAP/momentum/volume features, explainable BUY/SELL/HOLD decisions, ATR-based stops and sizing, a drawdown kill rule, event-driven backtesting, walk-forward folds, and a QAOA-compatible binary portfolio objective.
+
+`GET /api/v1/platform/demo?symbol=NIFTY` returns the pipeline as JSON. It is deliberately labelled `SIMULATION`: synthetic data and a classical reference optimizer are safe development defaults. Live data, trained model serving, quantum-provider jobs, persistent paper orders, and broker order placement require separately reviewed adapters. Never infer authorization to place an order from a generated signal.

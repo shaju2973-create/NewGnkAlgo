@@ -10,7 +10,7 @@
     "dev": "tsx watch src/server.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/src/server.js",
-    "test": "node --import tsx --test test/security.test.ts test/auth.test.ts",
+    "test": "node --import tsx --test test/*.test.ts",
     "lint": "tsc --noEmit"
   },
   "dependencies": {
