@@ -2,33 +2,41 @@
 
 Security-first Node.js/TypeScript + PostgreSQL boilerplate for:
 
-- account creation with Google Identity Services or verified mobile OTP (Twilio Verify);
-- linking one user to several broker connections;
+- gnkalgo-owned email/password accounts with mandatory mobile OTP verification;
+- login with short-lived JWT access tokens and rotating HttpOnly refresh JWTs;
+- mobile OTP password recovery without a third-party email provider;
 - broker-hosted login/2FA redirects and server-side code exchange;
 - AES-256-GCM encryption of broker tokens and vendor credentials;
-- per-user emergency kill switch and a 15:30 Asia/Kolkata token purge;
-- outbound broker traffic through a required static-IP proxy in production.
+- emergency kill switch, 15:30 Asia/Kolkata token purge, and static-IP broker egress.
 
-This is a reference implementation, not a certification or legal opinion. Broker contracts and current SEBI/exchange rules remain authoritative. Never enable a broker adapter until its current official documentation and app approval have been reviewed.
+This is a reference implementation, not a certification or legal opinion. Broker contracts and current SEBI/exchange rules remain authoritative.
 
-## Quick start
+## Setup
 
-1. Copy `.env.example` to `.env` and replace every placeholder. Generate 32-byte values with `openssl rand -base64 32`.
-2. Create PostgreSQL, then run `psql "$DATABASE_URL" -f migrations/001_init.sql`.
-3. Run `npm install`, `npm run dev`, and serve the frontend over the same HTTPS origin in production.
-4. Register the exact callback URL `https://YOUR_HOST/api/v1/auth/callback/<broker>` with each broker.
-5. Whitelist the proxy's fixed public IPv4 with every broker; direct egress is rejected when `NODE_ENV=production`.
+1. Copy `.env.example` to a protected environment file. Generate `COOKIE_SECRET`, `JWT_SECRET`, the AES data key, and one-time `ADMIN_BOOTSTRAP_TOKEN` independently with `openssl rand -base64 48` (AES uses `openssl rand -base64 32`).
+2. Run `migrations/001_init.sql`, followed by `migrations/002_local_accounts_jwt.sql`.
+3. Run `npm ci`, `npm run build`, and `npm test`.
+4. Serve the app behind HTTPS. It binds to `127.0.0.1:3000` by default.
+5. Register exact broker callback URLs and whitelist the fixed egress IPv4.
 
-The seed inserts `gnkalgo.admin@gmail.com` as an admin but does **not** bypass Google verification or create a password. The first successful Google login claims that seeded account.
+The first registration using `ADMIN_EMAIL` must also supply the one-time `ADMIN_BOOTSTRAP_TOKEN`; other accounts cannot self-assign admin. Remove or rotate that token after the admin is created.
 
-## Routes
+## Pages
 
-- `POST /api/v1/auth/google` `{ credential }`
-- `POST /api/v1/auth/otp/request` `{ mobile }`
+- `/create-account` — email, password and verified mobile registration
+- `/login` — email/password sign-in
+- `/forgot-password` — mobile OTP password reset
+
+## Authentication routes
+
+- `POST /api/v1/auth/otp/request` `{ mobile, purpose: "register" }`
 - `POST /api/v1/auth/otp/verify` `{ mobile, code }`
+- `POST /api/v1/auth/register` `{ displayName, email, password, mobileVerificationToken, adminBootstrapToken? }`
+- `POST /api/v1/auth/login` `{ email, password }`
+- `POST /api/v1/auth/refresh`
 - `POST /api/v1/auth/logout`
-- `GET /api/v1/auth/redirect/:broker` (authenticated browser navigation)
-- `GET /api/v1/auth/callback/:broker`
-- `POST /api/v1/trades/kill-switch` `{ confirm: "KILL" }`
+- `POST /api/v1/auth/forgot-password` `{ email }`
+- `POST /api/v1/auth/reset-password` `{ email, code, newPassword }`
+- `GET /api/v1/auth/me`
 
-See [docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md) for flow, edge cases, frontend snippets, operations, and compliance caveats. See [MASTER_PROMPT.md](MASTER_PROMPT.md) for a portable prompt usable with AI coding tools.
+Broker routes accept either the HttpOnly access JWT cookie or `Authorization: Bearer <access-token>`. See [docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md) for security and migration details.

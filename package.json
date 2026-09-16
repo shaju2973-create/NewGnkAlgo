@@ -10,7 +10,7 @@
     "dev": "tsx watch src/server.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/src/server.js",
-    "test": "node --import tsx --test test/security.test.ts",
+    "test": "node --import tsx --test test/security.test.ts test/auth.test.ts",
     "lint": "tsc --noEmit"
   },
   "dependencies": {
@@ -19,7 +19,7 @@
     "@fastify/rate-limit": "^10.0.0",
     "dotenv": "^16.4.7",
     "fastify": "^5.2.1",
-    "google-auth-library": "^9.15.1",
+    "jose": "^6.0.8",
     "luxon": "^3.5.0",
     "pg": "^8.13.1",
     "twilio": "^5.4.3",

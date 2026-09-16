@@ -1,32 +1,37 @@
-# Implementation guide
+# Local-account and JWT implementation
 
-## Architecture and flows
+## Account creation
 
-`users` is the stable account and `user_identities` stores a unique Google `sub` or canonical E.164 mobile number. Google credentials are verified server-side for signature, audience, issuer, expiry and verified email. Twilio Verify owns OTP generation; the app stores only a phone hash, expiry, attempt count and consumption state. Existing identities sign into the existing user rather than creating duplicates. Never auto-link two identities from matching user-supplied data: require login plus fresh verification of the identity being added.
+The user requests and verifies an SMS OTP through Twilio Verify. A successful verification creates a random, hashed, single-use mobile verification grant lasting ten minutes. Registration atomically consumes that grant, creates the `users` row, stores a scrypt password hash, and binds the verified E.164 number as a unique mobile identity. Email and mobile uniqueness constraints prevent duplicate accounts.
 
-The browser receives an opaque server-session cookie. Only its SHA-256 hash is stored. A broker connect link navigates to `/api/v1/auth/redirect/:broker`; the server stores a hashed, single-use, ten-minute state and redirects to the broker. Broker-hosted login and 2FA remain untouched. The callback atomically consumes state, exchanges the one-time code through fixed egress, encrypts the access token and upserts the daily connection.
+Passwords must contain 12–128 characters, uppercase, lowercase, and a number. They are hashed with Node.js scrypt using a random 128-bit salt; plaintext passwords are never stored or logged. Five failed logins lock the credential for fifteen minutes. Production should add breached-password screening and a Redis-backed distributed limiter.
 
-Zerodha's documented request-token/checksum handshake is adapter-specific and OAuth-style, not standards-identical OAuth 2.0. Upstox documents an authorization-code exchange. Dhan, Fyers and Angel One remain disabled until their current approved redirect contracts are added and tested. Never collect broker passwords, PINs or TOTPs and never automate login screens.
+`gnkalgo.admin@gmail.com` is configured through `ADMIN_EMAIL`. Its first registration additionally requires the independently generated `ADMIN_BOOTSTRAP_TOKEN`. Remove that token from the service environment after the admin account is created and restart the service.
 
-## Minimal frontend
+## JWT sessions
 
-Load `https://accounts.google.com/gsi/client`, call `google.accounts.id.initialize({client_id, callback})`, render the official button, and in the callback POST `{credential: response.credential}` to `/api/v1/auth/google` with JSON and `credentials: "include"`. Never trust a browser-only JWT decode.
+Access JWTs use HS256, issuer/audience validation, and a fifteen-minute lifetime. Refresh JWTs last thirty days, rotate after every use, and are tracked by a hash and token-family identifier in PostgreSQL. Reuse revokes the entire family. Both are delivered as Secure, HttpOnly, SameSite=Strict cookies; API clients may also use the returned access token as a Bearer token. Keep `JWT_SECRET` in OCI Vault in mature production and rotate it with a planned all-session logout.
 
-For mobile, normalize input with a phone-number library, POST `{mobile}` to `/api/v1/auth/otp/request`, then show an accessible numeric input and POST `{mobile,code}` to `/api/v1/auth/otp/verify`. Disable resend briefly, display a countdown, and use generic responses to reduce account enumeration. Broker buttons should navigate (not AJAX) to `/api/v1/auth/redirect/upstox`. The kill switch should require reauthentication in a hardened deployment plus typed confirmation `KILL`.
+## Password recovery
 
-## Production controls
+The forgot-password endpoint always returns the same generic response. If an account exists, Twilio sends an OTP to its already verified mobile. Successful reset replaces the password hash and revokes every refresh token for that user. It never accepts a new mobile number during recovery.
 
-- Use TLS/HSTS, Secure/HttpOnly/SameSite cookies, strict CSP, small bodies and trusted-ingress-only proxy headers.
-- Replace the process-local limiter with Redis limits by IP, salted phone hash, user and broker. Suggested ceilings: OTP send 3/15 minutes/phone and 10/hour/IP; verify 5/challenge; OAuth start 10/minute/user; callback 20/minute/IP; kill switch 5/minute/user.
-- Move data keys to KMS/HSM/Key Vault. Add a new key version, make it active, re-encrypt each row transactionally, then retire the old version only after verification. AES-GCM uses random 96-bit IVs and AAD binding user, broker and field.
-- Redact cookies, authorization headers, callback query strings, codes, state, OTP, phone/email, tokens, client secrets, vendor keys and encryption material. Audit event identifiers and result classes, not PII.
-- Route every broker token and order client through a static-IP NAT/proxy and block direct internet egress at the network layer. The included proxy is the application seam, not proof of infrastructure compliance.
-- Run an external idempotent purge at 15:30 Asia/Kolkata and retain startup/minute reconciliation. Do not persist or cycle refresh tokens. The requested cutoff is a wall-clock policy, including holidays.
-- The kill switch first disables worker state and deletes tokens transactionally. Add official broker revocation and worker cancellation. It cannot recall orders already accepted by an exchange.
-- Add least-privilege database roles, encrypted PITR backups, clock synchronization, dependency/SAST/secret scanning, alerts on purge failures, incident runbooks, threat modeling and penetration testing.
+## Migration and deployment
 
-## Edge cases and verification
+Back up PostgreSQL before applying `002_local_accounts_jwt.sql`. It adds credentials, refresh tokens, verification grants, reset challenges, and OTP purpose fields. It removes only the untouched placeholder admin seed; claimed accounts and broker data are preserved. The legacy `google` enum label and `app_sessions` table may remain in databases created with migration 001, but no route or package can use Google sign-in.
 
-Handle unique-constraint registration races by retrying and reading the winner. Reject reused, expired or broker-mismatched state, arbitrary redirect URLs and request-provided endpoints/scopes. Contract-test every adapter against official sandboxes and pin reviewed API versions. Run migrations, then `npm install`, `npm test`, and `npm run build`; add provider mocks and database integration tests before deployment.
+For `/opt/gnkalgo` on Ubuntu:
 
-Code alone does not establish SEBI compliance. Broker approval, current exchange/SEBI requirements, static-IP verification, operational controls, algo registration/tagging where applicable, and qualified legal/compliance review are external gates.
+```bash
+cd /opt/gnkalgo
+sudo -u postgres pg_dump --format=custom --file=/var/backups/gnkalgo/pre-jwt.dump gnkalgo
+sudo -u gnkalgo git pull --ff-only origin master
+sudo -u gnkalgo npm ci
+sudo -u gnkalgo npm run build
+sudo -u gnkalgo npm test
+psql "$DATABASE_URL" --set=ON_ERROR_STOP=1 --file=migrations/002_local_accounts_jwt.sql
+sudo systemctl restart gnkalgo
+curl --fail https://gnkalgo.com/health/live
+```
+
+Never display the environment file or put secrets in Git. Use TLS/HSTS, strict origin checks, Redis rate limits, secret-redacted logs, least-privilege database roles, encrypted backups, and OCI Vault. Broker credentials and tokens remain separate from user-login JWTs.
